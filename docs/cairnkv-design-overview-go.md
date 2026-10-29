@@ -85,7 +85,7 @@ internal 核心引擎（WAL / MemTable / SSTable / Manifest / Compaction）
 
 | 编号 | 需求 | 优先级 |
 |------|------|--------|
-| F-01 | 键和值均为任意字节序列，引擎不解释值的内容 | M |
+| F-01 | 键和值均为任意字节序列，引擎不解释值的内容；键最长 64 KiB，单个批次在内存表中的占用不超过 `MemTableSize / 2`（默认约 2 MiB），超出时明确报错 | M |
 | F-02 | 支持写入、读取、删除单个键 | M |
 | F-03 | 删除通过墓碑标记实现，旧文件中的历史数据在合并时回收 | M |
 | F-04 | 同一键后写覆盖先写，以全局单调递增的序号判定新旧 | M |
@@ -101,7 +101,7 @@ internal 核心引擎（WAL / MemTable / SSTable / Manifest / Compaction）
 | P-01 | 每次变更在确认前先记录到预写日志（WAL） | M |
 | P-02 | WAL 分两层：物理分块层（每个 chunk 带校验和、长度、片段类型、日志号、已同步偏移）与逻辑记录层（批次起始序号、操作数，以及每个操作的类型、键、值） | M |
 | P-03 | 提供三档同步策略：逐次同步（`SyncAlways`）、分组同步（`SyncGroupCommit`，默认）、不同步（`NoSync`，须显式选择，名称不宣称持久性） | M |
-| P-04 | 重启时只截断最后一个 WAL 中由崩溃留下的残缺尾部；已同步区域内的任何损坏都必须报错，不得静默截断 | M |
+| P-04 | 重启时只截断最后一个 WAL 中由崩溃留下的残缺尾部；已同步区域内的损坏都必须报错，不得静默截断（剩余风险见 `docs/durability.md` §12） | M |
 | P-05 | 元数据（MANIFEST）是崩溃后状态的唯一依据，记录当前有效的数据文件集合；当前 MANIFEST 由标记文件指出（取代 `CURRENT`） | M |
 | P-06 | 数据文件写完并 fsync 后才登记进元数据；元数据切换通过新建标记文件原子完成（数据文件不经过临时文件重命名） | M |
 | P-07 | 未被元数据登记的残留文件，在启动时识别并清理 | M |
@@ -163,7 +163,8 @@ internal 核心引擎（WAL / MemTable / SSTable / Manifest / Compaction）
 - 逐次同步档（`SyncAlways`）：确认返回之前，该写入已通过同步调用刷盘。
 - 分组同步档（`SyncGroupCommit`，默认）：确认发生在包含该批次的那一次组提交 fsync 成功返回之后；文档必须明确该语义与延迟代价。
 - 不同步档（`NoSync`）：返回时只保证写入已进入日志，不保证持久；崩溃可能丢失这些写入，但恢复结果仍是已提交批次的某个前缀，不会出现中间缺口。
-- fsync 失败后引擎进入毒化状态：之后所有操作返回 `ErrEnginePoisoned`，绝不把未持久化的写入报告为成功。
+- 同步类调用失败，或日志、元数据文件写入失败后，引擎进入毒化状态：之后所有操作都返回 `ErrEnginePoisoned`，绝不把未持久化的写入报告为成功。
+- 同步档的写入只在 fsync 成功后才对读者可见；不同步档的写入可见先于持久。
 - 范围扫描结果按键升序，不出现同一键的重复可见版本。
 
 ### 4.2 性能（实验性目标）
@@ -183,7 +184,7 @@ internal 核心引擎（WAL / MemTable / SSTable / Manifest / Compaction）
 
 ### 4.4 可移植性
 
-- 首要平台：Linux；macOS 用于开发。
+- 首要平台：Linux；macOS 用于开发。承诺持久性的文件系统为 Linux ext4 / xfs 与 macOS APFS；在 tmpfs、overlayfs、NFS 上打开时发出警告（见 `docs/durability.md` §12）。
 - 平台相关代码（内存映射、目录同步等）集中隔离，其余代码保持可移植。
 - 需要专门验证：`fsync` 语义在不同文件系统上的差异。
 
@@ -263,7 +264,8 @@ internal 核心引擎（WAL / MemTable / SSTable / Manifest / Compaction）
 cairnkv/
 ├── go.mod
 ├── README.md
-├── LICENSE
+├── LICENSE                  # Apache-2.0
+├── LICENSES/                # 移植代码的原许可证（首次移植时创建）
 ├── justfile                 # 常用命令：构建、测试、Linux 容器测试、门禁
 ├── cairnkv.go               # 公开入口（package cairnkv）：Open / DB 接口 / Options
 ├── options.go               # 公开配置类型
@@ -302,7 +304,10 @@ cairnkv/
 │   └── bench/               # 基准与对照实验
 │
 └── docs/
-    ├── spec-closure.md      # 规格收口决议（与研究文档冲突时以它为准）
+    ├── spec-closure.md      # 规格收口决议（决定与理由；分工见其 §5）
+    ├── file-format.md       # 磁盘格式规格（字节布局的唯一权威）
+    ├── durability.md        # 持久化与恢复规格（协议的唯一权威）
+    ├── archive/             # 草案 v0.1
     ├── research/            # 研究交付文档（保持原样）
     ├── architecture.md      # 架构与依赖规则
     ├── file-format.md       # 数据目录与文件格式说明
@@ -345,10 +350,10 @@ test    ──▶ 任意包
 | 模块路径 | `github.com/LystranG/cairnkv` | — |
 | 包名 | 全小写、短、单数、不含下划线 | `wal`、`sstable` |
 | 导出类型 | 名词，表达职责 | `Options`、`Iterator` |
-| 接口 | 以行为命名；仅一个方法时可用“-er” | `Compactor`、`FileSystem` |
+| 接口 | 以行为命名；仅一个方法时可用“-er” | `Compactor`、`vfs.FS` |
 | 错误 | 以 `Err` 开头的哨兵错误，或带上下文的包装错误 | `ErrNotFound`、`ErrCorruption` |
 | 测试文件 | 与被测文件同目录，`*_test.go` | `wal_test.go` |
-| 数据文件 | 固定前缀 + 递增编号，位数固定 | `000012.wal`、`000034.sst` |
+| 数据文件 | 递增编号（至少 6 位，左侧补零，超出时自然变宽）+ 后缀 | `000012.wal`、`000034.sst` |
 | 元数据文件 | 固定前缀 + 编号 | `MANIFEST-000001` |
 | 标记文件 | `marker.<名称>.<迭代号>.<值>` | `marker.manifest.<迭代号>.MANIFEST-000001` |
 | 目录锁 | 固定文件名 | `LOCK` |
@@ -434,10 +439,10 @@ WAL 与 MANIFEST 的文件头、SSTable 的 footer 都带魔数（`CairnWAL` / `
 | 阶段 | 内容 |
 |------|------|
 | M0 | 骨架与契约：模块与目录、错误分类、`vfs` 接口与 os / 内存实现、`Options` 两层结构、justfile 与 CI |
-| M1 | 公开 API 雏形 + WAL + 内存表 + 组提交 + 毒化状态机 + 崩溃恢复最小闭环 |
-| M2 | 数据文件、块索引、过滤器、块缓存、压缩、元数据（标记文件）与刷盘提交 |
+| M1 | 公开 API 雏形 + WAL + 内存表 + 组提交 + 毒化状态机 + 崩溃恢复最小闭环（过渡实现见 `docs/durability.md` §13）；WAL 部分的崩溃检查器、`cairnkv-cli dump`（WAL）、确定性并发测试、`just test-linux-fs` |
+| M2 | 数据文件、块索引、过滤器、块缓存、压缩、元数据（标记文件）、刷盘提交与完整的打开协议；`dump`（SSTable）、文件系统识别 |
 | M3 | 分层合并、墓碑回收、调度与背压、放大系数统计、故障注入全覆盖 |
-| M4 | 网络接入层与远程客户端、命令行工具（含 `cairnkv check`） |
+| M4 | 网络接入层与远程客户端、命令行工具 `cairnkv-cli`（含 `check` 子命令） |
 | M5 | 时序示例、对照实验、论文材料 |
 
 ---
@@ -447,7 +452,7 @@ WAL 与 MANIFEST 的文件头、SSTable 的 footer 都带魔数（`CairnWAL` / `
 | 风险 | 对策 |
 |------|------|
 | 合并逻辑范围膨胀 | 第一期只实现一种策略，其余以接口预留 |
-| 平台文件系统语义差异 | 以 Linux 为验证基准，明确写入文档 |
+| 平台文件系统语义差异 | 以 Linux ext4 / xfs 与 macOS APFS 为验证基准，其余文件系统分档声明，写入 `docs/durability.md` |
 | 网络层反向污染引擎 | 依赖规则 + 导入检查 |
 | 过早追求映射读 | 先用普通读取，映射作为可对比实验 |
 | 扩展承诺过大 | 只承诺有序 KV 上的有限结构，示例只做一个 |
@@ -476,3 +481,4 @@ v0.1 原文另存为 `docs/archive/cairnkv-design-overview-go-v0.1.md`。本版�
 | §7 | 文件同步与 mmap 两行改为已定结论 | iter-04；D02 §7.3 |
 | §9 | 增加 M0，各里程碑内容与实现计划对齐 | D03 §2 |
 | §10 | 增加「规格与代码漂移」风险 | spec-closure I-5 |
+| F-01、§4.1、§4.4、§6.1、§6.3、§9、§10（审阅后补充） | 大小上限；毒化范围与可见性；文件系统分档；目录树补 LICENSES 与规格文件；接口示例改为 `vfs.FS`；文件编号宽度；M1/M2 的交付项与命令行工具名称 | spec-closure §2.4（SC-50、SC-53、SC-54、SC-56）、I-8 |
