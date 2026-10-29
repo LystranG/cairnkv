@@ -1,0 +1,11 @@
+# Autoresearch session artifacts (research loop working directory)
+.autoresearch/
+
+# macOS
+.DS_Store
+
+.pi
+.serena
+.claude
+.agents
+skills-lock.json
