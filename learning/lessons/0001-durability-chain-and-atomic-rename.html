@@ -1,0 +1,282 @@
+<title>第 1 课 · 一次写入何时才算"落地"</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/course.css">
+
+<header class="lesson">
+  <nav class="crumbs"><a href="../index.html">← 课程地图</a> · <a href="../reference/durability-cheatsheet.html">速查：持久化</a></nav>
+  <div class="kicker">A · 存储与文件系统 · 第 1 课</div>
+  <h1>一次写入何时才算"落地"</h1>
+  <p class="subtitle">write、fsync、rename 与那个最常被忘的目录 fsync</p>
+  <div class="meta">
+    <span>约 70 分钟（可分两次）</span>
+    <span>对应：learning-path §2.1 自测 1 · M0 练习 3</span>
+    <span>仓库落点：D02 §9.3（D1–D6）</span>
+  </div>
+</header>
+
+<main>
+
+<div class="box win">
+  <span class="label">本课收获</span>
+  学完能<strong>默写</strong>"原子替换一个文件"的四步协议，并对其中任意一步之后断电，说出重启时磁盘上的状态。
+  CairnKV 切换"当前 MANIFEST"时依赖的就是这两条原则（内容先落盘、目录改动后 fsync 目录），M0 练习 3 要断言的也是它们。
+</div>
+
+<h2>0. 学习清单</h2>
+
+<h3>要读的材料</h3>
+<div class="table-wrap">
+<table class="reading">
+  <thead><tr><th>类型</th><th>材料与位置</th><th>时长</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>必读</td>
+      <td>《操作系统导论》（OSTEP 中文版，人民邮电出版社）<strong>第 39 章 插叙：文件和目录</strong><br>
+        · <strong>§39.6 用 fsync()立即写入</strong><br>
+        · <strong>§39.7 文件重命名</strong>（读到 §39.8 获取文件信息之前停）<br>
+        <span class="note">没带书：作者网站上有本章中文 PDF <a href="https://pages.cs.wisc.edu/~remzi/OSTEP/Chinese/39.pdf">39.pdf</a>。
+        英文在线版 v1.10 多了一节，同样内容是 §39.7–§39.8。</span></td>
+      <td>15 分钟</td>
+    </tr>
+    <tr>
+      <td>源码</td>
+      <td>本地 <code>.autoresearch/third_party/</code> 下，只看指定行：<br>
+        · <code>leveldb/util/env_posix.cc</code> 第 335–340 行（MANIFEST 刷盘前同步目录）<br>
+        · <code>leveldb/db/filename.cc</code> 第 123–139 行（<code>SetCurrentFile</code>：写 tmp → rename）<br>
+        · <code>badger/dir_unix.go</code> 第 93–95 行（注释：创建 / 删除文件后为什么要 sync 目录）</td>
+      <td>10 分钟</td>
+    </tr>
+    <tr>
+      <td>选读</td>
+      <td><a href="https://danluu.com/file-consistency/">Dan Luu, "Files are hard"</a>（英文博客），只读 <strong>Crash Consistency</strong> 一节：一个加了 fsync 仍然出错的协议如何被一步步修好</td>
+      <td>10 分钟</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h3>按顺序完成（勾选会保存在本机浏览器）</h3>
+<ol class="checklist" data-key="0001">
+  <li><label><input type="checkbox"><strong>预览</strong>（5 分钟）：扫一遍本页第 1–4 节，知道有哪些概念即可，看不懂没关系。</label></li>
+  <li><label><input type="checkbox"><strong>读必读</strong>（15 分钟）：读《操作系统导论》§39.6–§39.7。读的时候找三句话并划线：</label>
+    <span class="ref">① write 后数据在内存里缓冲多久；② "还需要 fsync() 包含 foo 文件的目录"；③ rename"（通常）是一个原子调用"。</span></li>
+  <li><label><input type="checkbox"><strong>回到本页细读</strong>（5 分钟）：读第 1–4 节，把划线的三句和本页的三层图、四步协议对上。</label></li>
+  <li><label><input type="checkbox"><strong>读源码</strong>（10 分钟）：按上表打开三处代码。每处只回答一个问题：这里做的是四步协议里的第几步？</label></li>
+  <li><label><input type="checkbox"><strong>合上书做排序题</strong>（3 分钟）：第 3 节"动手：排出协议"。不许回翻。</label></li>
+  <li><label><input type="checkbox"><strong>做测验</strong>（7 分钟）：第 5 节 6 道题，记下首次作答得分。</label></li>
+  <li><label><input type="checkbox"><strong>默写</strong>（5 分钟）：在第 5 节的文本框里写自测问题 1 的答案，写完再展开参考答案，用红笔（或另起一行）补上漏掉的点。</label></li>
+  <li><label><input type="checkbox"><strong>做作业</strong>（15 分钟）：页面底部"带回仓库"的三道题，写在草稿或 <code>docs/adr/</code> 里。</label></li>
+  <li><label><input type="checkbox"><strong>发给我</strong>：测验得分 + 默写内容 + 作业答案 + 没弄懂的地方。我会追问并据此调整第 2 课。</label></li>
+</ol>
+
+<h2>1. 三层楼：write 返回时，数据在哪</h2>
+
+<p>先把"写成功"拆开。一次 <code>write()</code> 至少要穿过三层，<strong>每层的"成功"含义不同</strong>：</p>
+
+<div class="stack">
+  <div class="layer"><b>应用缓冲</b><span>例如 Go 里 <code>bufio.Writer</code> 的内存。进程崩溃就丢。</span></div>
+  <div class="arrow">↓ write() 系统调用返回</div>
+  <div class="layer"><b>内核页缓存</b><span>page cache。进程崩溃<em>不丢</em>，断电/内核崩溃会丢。</span></div>
+  <div class="arrow">↓ fsync() 返回</div>
+  <div class="layer"><b>持久介质</b><span>断电后仍在（前提是 fsync 被正确实现，第 2 课细讲 macOS 的坑）。</span></div>
+</div>
+
+<p>OSTEP 的说法是：调用 <code>write()</code> 只是在告诉文件系统"<em>将来某个时候</em>把它写到持久存储"；
+文件系统为了性能会在内存里攒 5 秒或 30 秒再下发。</p>
+<span class="side">出处：《操作系统导论》§39.6 用 fsync()立即写入（英文 v1.10 为 §39.7）。</span>
+
+<p>数据库要的是确定性，所以有 <code>fsync(fd)</code>：把<strong>这个文件</strong>的全部脏数据强制刷到磁盘，刷完才返回。</p>
+
+<h2>2. 陷阱：文件内容 ≠ 文件名</h2>
+
+<p>一个"文件"在文件系统里其实是两样东西：<strong>inode（内容 + 元数据）</strong>和<strong>目录里的一条目录项</strong>（名字 → inode）。
+目录本身也是一个文件，它的内容就是这些目录项。</p>
+
+<p>于是 <code>fsync(f)</code> 刷的是 f 的 inode 和数据，<strong>不保证</strong>"f 这个名字已经写进了父目录"。书中原文：</p>
+
+<blockquote>
+  有趣的是，这段代码并不能保证你所期望的一切。在某些情况下，还需要 fsync()包含 foo 文件的目录。添加此步骤不仅可以确保文件本身位于磁盘上，而且可以确保文件（如果新创建）也是目录的一部分。毫不奇怪，这种细节往往被忽略，导致许多应用程序级别的错误。
+  <cite>——《操作系统导论》§39.6 用 fsync()立即写入</cite>
+</blockquote>
+
+<p>新建文件、rename、删除，改的都是<strong>目录</strong>的内容。想让这些改动扛过断电，就要对<strong>目录</strong>打开一个 fd 再 fsync。</p>
+
+<h2>3. 原子替换协议</h2>
+
+<p>要把 <code>CURRENT</code>（LevelDB 里记录"当前是哪个 MANIFEST"的小文件）从旧内容换成新内容，又不允许崩溃后看到"半个文件"，经典做法是：</p>
+
+<pre><code>fd = open("CURRENT.tmp", O_CREAT|O_WRONLY|O_TRUNC)
+write(fd, newContent)       // ① 新内容进页缓存
+fsync(fd); close(fd)        // ② 新内容落盘
+rename("CURRENT.tmp", "CURRENT")  // ③ 原子换名
+fsync(dirfd)                // ④ 换名这件事落盘</code></pre>
+
+<p>每一步各有用处：</p>
+<ul>
+  <li><strong>③ rename 是原子的</strong>：书中说，若在 rename 过程中崩溃，文件要么是旧名字、要么是新名字，不会出现中间态。<span class="side">《操作系统导论》§39.7 文件重命名。原文："它（通常）是一个原子（atomic）调用"，注意那个"通常"。</span></li>
+  <li><strong>② 必须在 ③ 之前</strong>：原子性只管"名字指向谁"，不管"被指向的内容到盘了没有"。在一些文件系统上，rename 可能先于 tmp 的数据被持久化，崩溃后 <code>CURRENT</code> 就指向一个空的或半截的文件，<strong>旧版本也已经没了</strong>。</li>
+  <li><strong>④ 必须在 ③ 之后</strong>：rename 返回成功只说明"内核里已经换名"，<em>不</em>说明换名已持久。没有 ④，重启后看到的可能仍是旧的 <code>CURRENT</code>，这种情况合法，不算损坏，但也就谈不上"已确认"。</li>
+</ul>
+<span class="side">各文件系统在"什么操作会被重排"上差异很大，见 Pillai et al., <a href="https://www.usenix.org/system/files/conference/osdi14/osdi14-paper-pillai.pdf">OSDI 2014</a>；他们在 11 个应用里找到 60 个崩溃漏洞，LevelDB 也在其中。通俗版：<a href="https://danluu.com/file-consistency/">Dan Luu, "Files are hard"</a>。</span>
+
+<h3>动手：排出协议</h3>
+<p>不要往回翻，凭记忆排序。排错时会告诉你<strong>崩溃后具体会出什么事</strong>。</p>
+
+<div class="seq" data-config='{
+  "steps": [
+    {"id":"w","label":"write(tmp)"},
+    {"id":"s","label":"fsync(tmp)"},
+    {"id":"r","label":"rename(tmp → CURRENT)"},
+    {"id":"d","label":"fsync(dir)"}
+  ],
+  "rules": [
+    {"before":"w","after":"s","msg":"fsync 只刷已经写进页缓存的脏数据；在 fsync 之后才 write 的内容不受它保护。"},
+    {"before":"s","after":"r","msg":"rename 先于 tmp 数据落盘：断电后 CURRENT 可能指向空的或半截的文件，而旧版本已被替换掉。"},
+    {"before":"r","after":"d","msg":"目录在 rename 之前就 fsync 了，持久化的是旧的目录项；rename 本身仍可能在断电后丢失。"}
+  ],
+  "success":"② 保证内容先到盘，③ 原子地切换名字，④ 让切换本身持久。任何一步之后断电，看到的都是完整的旧版本或完整的新版本。"
+}'></div>
+
+<h2>4. 在 CairnKV 里，它出现在哪</h2>
+
+<p>先说一个区别。LevelDB 的 <code>SetCurrentFile</code> 用的正是上面的 ①②③：<code>WriteStringToFileSync</code> 写 tmp 并 fsync，再 <code>RenameFile</code> 成 CURRENT。
+CairnKV 按研究结论<strong>不用 CURRENT + rename</strong>，而是改用 Pebble 式的<strong>标记文件</strong>：新建一个名字里带着 MANIFEST 编号的标记文件，Sync 它，删掉旧标记，最后 fsync 目录。
+形式不同，原则相同：<strong>内容先落盘，再让目录改动落盘</strong>。</p>
+<span class="side">LevelDB：<code>leveldb/db/filename.cc:123-139 @ 7ee830d</code>。CairnKV 的步骤 S1–S6：<code>.autoresearch/work/iter-15-manifest-versioning.md</code> 第 375–386 行，源自 <code>pebble/vfs/atomicfs/marker.go</code>。</span>
+
+<p>研究阶段整理出的目录 fsync 调用点共六处（D1–D6）。挑三处对上本课：</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>编号</th><th>时机</th><th>防什么</th></tr></thead>
+  <tbody>
+    <tr><td>D2</td><td><code>SetCurrentManifest</code> 新建标记、删旧标记之后（S5）</td><td>和本课 ④ 同理：让"当前 MANIFEST 是谁"的切换持久</td></tr>
+    <tr><td>D3</td><td>SSTable 刷完、写进 MANIFEST <strong>之前</strong></td><td>MANIFEST 引用一个目录里没有的文件</td></tr>
+    <tr><td>D4</td><td>合并删除旧 SST 之后</td><td>重启后"文件在不在"不确定</td></tr>
+  </tbody>
+</table>
+</div>
+<span class="side">完整表：<code>.autoresearch/work/iter-15-manifest-versioning.md</code> 第 400–405 行；结论在 <code>docs/research/DELIVERABLE-02-design-decisions.md</code> §9.3。</span>
+
+<p>D3 在 LevelDB 里有一模一样的代码，读一遍注释就够了：</p>
+
+<pre><code>// Ensure new files referred to by the manifest are in the filesystem.
+//
+// This needs to happen before the manifest file is flushed to disk, to
+// avoid crashing in a state where the manifest refers to files that are not
+// yet on disk.
+Status status = SyncDirIfManifest();</code></pre>
+<span class="side"><code>leveldb/util/env_posix.cc:335-340 @ 7ee830d</code>（本地：<code>.autoresearch/third_party/leveldb/</code>）。</span>
+
+<h2>5. 检验</h2>
+
+<p class="quiz-score"></p>
+
+<div class="quiz" data-answer="b">
+  <p class="q">Q1. <code>write()</code> 成功返回，<strong>最多</strong>能保证数据到了哪里？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">已落到磁盘扇区上</button>
+    <button class="opt" data-k="b">已进入内核页缓存</button>
+    <button class="opt" data-k="c">已进入磁盘写缓存</button>
+    <button class="opt" data-k="d">已写入元数据日志</button>
+  </div>
+  <p class="why" hidden>write 只把数据交给内核（page cache）。进程崩溃不丢，断电会丢。要过下一层得靠 fsync。</p>
+</div>
+
+<div class="quiz" data-answer="d">
+  <p class="q">Q2. <strong>新建</strong>文件 f，<code>write(f)</code> 与 <code>fsync(f)</code> 都成功，随后立刻断电。重启后最可能出现的"坏情况"是？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">f 在但内容全为零</button>
+    <button class="opt" data-k="b">f 的内容被截一半</button>
+    <button class="opt" data-k="c">f 变成了只读文件</button>
+    <button class="opt" data-k="d">目录里根本没有 f</button>
+  </div>
+  <p class="why" hidden>fsync(f) 刷的是 f 的 inode 和数据；"f 这个名字"是父目录的内容。父目录没 fsync，目录项就可能没落盘。</p>
+</div>
+
+<div class="quiz" data-answer="a">
+  <p class="q">Q3. foo 已存在，执行 <code>rename(tmp, foo)</code>，<strong>rename 进行中</strong>断电。重启后 foo 是？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">旧版或新版二选一</button>
+    <button class="opt" data-k="b">新旧内容混在一起</button>
+    <button class="opt" data-k="c">一定已是新版本了</button>
+    <button class="opt" data-k="d">文件名会彻底消失</button>
+  </div>
+  <p class="why" hidden>rename 对崩溃是原子的（《操作系统导论》§39.7，"通常"）：要么旧名字、要么新名字。是不是新版本取决于 ④ 有没有做完。</p>
+</div>
+
+<div class="quiz" data-answer="c">
+  <p class="q">Q4. 原子替换协议里，为什么 <code>fsync(tmp)</code> 必须放在 <code>rename</code> 之前？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">改名操作需要持有锁</button>
+    <button class="opt" data-k="b">否则目录无法被同步</button>
+    <button class="opt" data-k="c">否则可能换上空内容</button>
+    <button class="opt" data-k="d">同步会撤销之前改名</button>
+  </div>
+  <p class="why" hidden>rename 只保证"名字切换"原子，不保证被指向的内容已到盘。先 rename 再刷数据，断电后可能换上一个空文件，旧版本也已被替换。</p>
+</div>
+
+<div class="quiz" data-answer="a">
+  <p class="q">Q5. LevelDB 在把 MANIFEST 刷盘<strong>之前</strong>先 <code>SyncDirIfManifest()</code>。它防的是哪种崩溃后状态？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">清单引用不存在文件</button>
+    <button class="opt" data-k="b">日志记录顺序被打乱</button>
+    <button class="opt" data-k="c">旧数据文件未被删除</button>
+    <button class="opt" data-k="d">当前清单写入速度慢</button>
+  </div>
+  <p class="why" hidden>这就是 D3：新 SST 的目录项必须先持久，MANIFEST 才能引用它。否则重启后元数据指向一个"目录里没有"的文件。</p>
+</div>
+
+<div class="quiz" data-answer="d">
+  <p class="q">Q6. 合并删除旧 SST 之后再 fsync 一次目录（D4），主要为了？</p>
+  <div class="opts">
+    <button class="opt" data-k="a">释放磁盘空间更快</button>
+    <button class="opt" data-k="b">让新文件立即可读</button>
+    <button class="opt" data-k="c">防止旧文件被改写</button>
+    <button class="opt" data-k="d">使删除结果可确定</button>
+  </div>
+  <p class="why" hidden>unlink 改的也是目录内容。不 fsync 目录，重启后旧文件可能"复活"；恢复逻辑最好能确定地知道哪些文件存在。</p>
+</div>
+
+<h3>回忆：用自己的话回答自测问题 1</h3>
+<p>先写，再展开对照。写的过程本身就是练习，写错了也比直接看答案有用。</p>
+<textarea class="scratch" placeholder="&quot;写临时文件 → rename&quot; 之后为什么还必须 fsync 目录？rename 返回成功意味着什么、不意味着什么？"></textarea>
+<details class="recall">
+  <summary>展开参考答案</summary>
+  <p>rename 改的是<strong>父目录的内容</strong>（目录项），而目录也有自己的页缓存。rename 返回成功意味着：内核中名字已经切换，之后的 open 能看到新文件；
+  且在崩溃面前它是原子的，不会出现半个名字。它<strong>不</strong>意味着切换已经持久：断电后可能回到旧名字。只有对目录 fsync 返回后，
+  这次切换才扛得过断电。另外，rename 也不对 tmp 的<strong>内容</strong>负责，所以 rename 之前还得先 fsync(tmp)。</p>
+</details>
+
+<div class="box homework">
+  <span class="label">带回仓库（可选，约 15 分钟设计 + 编码随 M0 进度）</span>
+  <p>M0 练习 3 要用"记录调用序列的包装 FS"断言目录 Sync 发生在 rename 之后。先不写代码，在 <code>docs/adr/</code> 或草稿里列出：</p>
+  <ol>
+    <li>切换一次 MANIFEST 标记（iter-15 的 S1–S6）时，你期望包装 FS 记录到的<strong>完整调用序列</strong>（Create、Sync、Close、Remove、OpenDir、Sync……）；</li>
+    <li>你的测试断言写成"出现顺序"还是"完全相等"？两种各会漏掉 / 误报什么？</li>
+    <li>思考题：LevelDB 的 <code>SetCurrentFile</code> 在 rename 之后<strong>没有</strong>显式 fsync 目录。按本课的说法，这留下了什么窗口？它可能靠什么兜底？（猜一个答案就行，下节课一起查源码核对。）</li>
+  </ol>
+  <p>写完把列表贴给我，我们下节课开头一起看。</p>
+</div>
+
+<h2>主读材料</h2>
+<p><strong>《操作系统导论》第 39 章 §39.6 用 fsync()立即写入、§39.7 文件重命名</strong>（约 15 分钟）。这是本课全部论断的一手出处。
+英文原版对应在线版 v1.10 的 §39.7–§39.8（<a href="https://pages.cs.wisc.edu/~remzi/OSTEP/file-intro.pdf">file-intro.pdf</a>）。</p>
+<p>想多读一点：<a href="https://danluu.com/file-consistency/">Dan Luu, "Files are hard"</a> （英文）的 Crash Consistency 一节，看一个"加了 fsync 还是不对"的协议是怎么一步步修好的。</p>
+
+<div class="ask">
+  <strong>有不清楚的地方，直接问我。</strong>比如"ext4 上 rename 真的会先于数据落盘吗？"、"Go 里怎么对目录 fsync？"、
+  "那 bbolt 不用 rename 是怎么保证原子的？"。问题越具体，下一课越贴合你。
+</div>
+
+</main>
+
+<footer class="lesson">
+  <span><a href="../index.html">课程地图</a> · <a href="../reference/durability-cheatsheet.html">速查：持久化</a></span>
+  <span>下一课：fsync 到底刷到哪（macOS <code>F_FULLFSYNC</code>）→</span>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+<script src="../assets/sequencer.js"></script>
+<script src="../assets/checklist.js"></script>

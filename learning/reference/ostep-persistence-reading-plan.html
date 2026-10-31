@@ -1,0 +1,90 @@
+<title>OSTEP 持久化重读计划</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/course.css">
+
+<header class="lesson">
+  <nav class="crumbs"><a href="../index.html">← 课程地图</a></nav>
+  <div class="kicker">Reference · 阅读计划</div>
+  <h1>OSTEP 持久化部分重读计划</h1>
+  <p class="subtitle">《操作系统导论》第 35–45 章 + 英文版补一章 SSD；分布式（第 46–50 章，含 NFS、AFS）不读</p>
+  <div class="meta">
+    <span>约 5 周 · 每周 3–5 小时</span>
+    <span>章节号按中文版</span>
+    <span>勾选状态保存在本机浏览器</span>
+  </div>
+</header>
+
+<main>
+
+<h2>怎么读一章（每章都一样）</h2>
+<ol>
+  <li><strong>读前 5 分钟</strong>：翻到本章的「关键问题」框（每章开头附近，如第 42 章"关键问题：考虑到崩溃，如何更新磁盘"），把它抄进笔记，再写下你<em>现在</em>凭记忆的回答，答不出就写"不知道"。</li>
+  <li><strong>读</strong>：按下表的"精读 / 通读 / 略读"分配精力。精读小节每读完一节就合上书，用两三句话在笔记里复述。</li>
+  <li><strong>读后</strong>：不看书回答下表里的"带着问题读"，再翻书核对，用另一种颜色补上漏掉的点。</li>
+  <li><strong>做作业</strong>（标了的章）：跑模拟器，按 README 里的题做 2–3 题。中文版第 42–44 章书里没有作业，去 <a href="https://github.com/remzi-arpacidusseau/ostep-homework">ostep-homework</a> 仓库对应目录看英文 README。</li>
+  <li><strong>写"和 CairnKV 的连接"</strong>：一两条就够，写这一章的哪个机制对应引擎里的哪个组件。这一栏最重要。</li>
+</ol>
+<p>笔记模板：<code>learning/notes/ostep/_template.md</code>，每章复制一份，命名为 <code>ch42.md</code> 之类。</p>
+
+<h2>第 1 周 · 设备与磁盘：顺序写为什么快</h2>
+<ol class="checklist" data-key="ostep-w1">
+  <li><label><input type="checkbox"><strong>第 35 章 关于持久性的对话</strong>（略读，5 分钟）</label></li>
+  <li><label><input type="checkbox"><strong>第 36 章 I/O 设备</strong>（通读）：精读 36.4 利用中断减少 CPU 开销、36.5 利用 DMA 进行更高效的数据传送、36.6 设备交互的方法；36.8 IDE 案例略读。</label>
+    <span class="ref">带着问题读：轮询和中断各在什么设备速度下更好？一次 I/O 期间 CPU 在做什么？</span></li>
+  <li><label><input type="checkbox"><strong>第 37 章 磁盘驱动器</strong>（精读 37.2–37.4）：37.4 I/O 时间：用数学，要亲手算一遍书里的例子；37.5 磁盘调度通读。作业：<code>disk.py</code>。</label>
+    <span class="ref">带着问题读：随机 4 KB 读和顺序读的吞吐差多少个数量级？差在寻道、旋转、传输里的哪一项？→ 这就是 LSM"把随机写变成顺序写"的根本动机。</span></li>
+  <li><label><input type="checkbox"><strong>第 38 章 廉价冗余磁盘阵列（RAID）</strong>（略读）：只精读 38.2 故障模型，其余扫一眼。</label>
+    <span class="ref">带着问题读：fail-stop 故障模型假设了什么？到第 44 章时回头对比：真实磁盘的故障比它复杂在哪？</span></li>
+</ol>
+
+<h2>第 2 周 · 文件系统接口与实现</h2>
+<ol class="checklist" data-key="ostep-w2">
+  <li><label><input type="checkbox"><strong>第 39 章 插叙：文件和目录</strong>（通读）：精读 39.4–39.7（读写、不按顺序读写、用 fsync()立即写入、文件重命名）、39.9 删除文件、39.13 硬链接。</label>
+    <span class="ref">带着问题读：为什么"删除文件"的系统调用叫 unlink？删除改的是谁的内容？（→ 第 1 课 D4）</span></li>
+  <li><label><input type="checkbox"><strong>第 40 章 文件系统实现</strong>（精读）：重点 40.3 文件组织：inode、40.4 目录组织、40.6 访问路径：读取和写入、40.7 缓存和缓冲。作业：<code>vsfs.py</code>。</label>
+    <span class="ref">带着问题读：创建一个新文件并写一个块，磁盘上要改哪几个结构？write 为什么能"立即返回"，代价是什么？</span></li>
+  <li><label><input type="checkbox"><strong>第 41 章 局部性和快速文件系统</strong>（略读 41.1–41.4）</label>
+    <span class="ref">带着问题读：FFS 把"相关的东西放在一起"；LSM 的 SSTable 按键有序存放，算不算同一种思想？</span></li>
+  <li><label><input type="checkbox"><strong>检查点</strong>：做 <a href="../lessons/0001-durability-chain-and-atomic-rename.html">第 1 课</a>。你已读过第 39 章，可以跳过它的"预览"和"读必读"两步。</label></li>
+</ol>
+
+<h2>第 3 周 · 崩溃一致性（全书对 CairnKV 最重要的一章）</h2>
+<ol class="checklist" data-key="ostep-w3">
+  <li><label><input type="checkbox"><strong>第 42 章 崩溃一致性：FSCK 和日志</strong>（逐节精读，可分两次）：42.1 一个详细的例子 → 42.2 解决方案 1：文件系统检查程序 → 42.3 解决方案 2：日志（或预写日志）→ 42.4 解决方案 3：其他方法。作业：仓库 <code>file-journaling/fsck.py</code>。</label>
+    <span class="ref">带着问题读：① 42.1 里三个写入只完成一部分时，一共有几种崩溃情形，各自的后果是什么？② 数据日志与元数据（有序）日志的写入顺序分别是什么，各省掉了什么？③ 事务提交块为什么要等前面的块写完才写？④ 恢复时为什么"重放"是安全的？→ 对应 CairnKV 的 WAL、确认点与恢复（M1）。</span></li>
+  <li><label><input type="checkbox"><strong>检查点</strong>：第 3 课（fsync 失败与毒化，V-04）放在这一周之后做。</label></li>
+</ol>
+
+<h2>第 4 周 · LFS 与数据完整性</h2>
+<ol class="checklist" data-key="ostep-w4">
+  <li><label><input type="checkbox"><strong>第 43 章 日志结构文件系统</strong>（精读）：重点 43.3 要缓冲多少、43.5 通过间接解决方案：inode 映射、43.6 检查点区域、43.9–43.11 垃圾收集与清理策略、43.12 崩溃恢复和日志。作业：仓库 <code>file-lfs/lfs.py</code>。</label>
+    <span class="ref">带着问题读：LFS 是 LSM-Tree 的思想近亲。逐项找对应：写缓冲 ↔ memtable / 组提交；inode 映射 + 检查点区域 ↔ MANIFEST + 当前标记；段清理 ↔ 合并（compaction）；清理成本 ↔ 写放大。哪一项对应不上？为什么？</span></li>
+  <li><label><input type="checkbox"><strong>第 44 章 数据完整性和保护</strong>（精读）：44.1 磁盘故障模式、44.3 检测讹误：校验和、44.4 使用校验和、44.5 错误的写入、44.6 丢失的写入、44.7 擦净。作业：仓库 <code>file-integrity/checksum.py</code>。</label>
+    <span class="ref">带着问题读：校验和放在块里能发现哪些故障，发现不了哪些？"错误的写入"和"丢失的写入"各要额外存什么才能检测？→ 对应块尾 CRC、自测问题 4 与 <code>cairnkv check --full</code>。</span></li>
+  <li><label><input type="checkbox"><strong>第 45 章 关于持久的总结对话</strong>（略读）</label></li>
+  <li><label><input type="checkbox"><strong>检查点</strong>：第 4 课（torn write 与 CRC）放在这一周之后做。</label></li>
+</ol>
+
+<h2>第 5 周 · 补一章：中文版没有的 SSD</h2>
+<ol class="checklist" data-key="ostep-w5">
+  <li><label><input type="checkbox"><strong>英文版 Flash-based SSDs</strong>（英文，精读）：<a href="https://pages.cs.wisc.edu/~remzi/OSTEP/file-ssd.pdf">file-ssd.pdf</a>。在英文 v1.10 里是第 44 章，中文版没有收录。作业：仓库 <code>file-ssd/ssd.py</code>。</label>
+    <span class="ref">带着问题读：闪存为什么不能原地覆写？FTL 的垃圾回收和第 43 章的段清理有什么相同之处？SSD 内部的写放大会和 LSM 的写放大叠加吗？</span></li>
+  <li><label><input type="checkbox"><strong>检查点</strong>：进入 B 阶段第 7 课（LSM 全景）。读完第 43 章和这一章再学，会顺很多。</label></li>
+</ol>
+
+<h2>不读的部分</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>章</th><th>处理</th><th>理由</th></tr></thead>
+  <tbody>
+    <tr><td>第 46 章 关于分布式的对话、第 47 章 分布式系统</td><td>跳过</td><td>分布式不在本课程范围（见 MISSION）</td></tr>
+    <tr><td>第 49 章 Andrew 文件系统（AFS）</td><td>跳过</td><td>讲的是分布式文件系统的缓存一致性与扩展性，CairnKV 是单机嵌入式引擎，用不上</td></tr>
+    <tr><td>第 48 章 Sun 的网络文件系统（NFS）</td><td>到 M4 再选读</td><td>只有两节与 CairnKV 有关：48.7 利用幂等操作处理服务器故障（对应 M4 的幂等请求 ID）、48.11 服务器端写缓冲的隐含意义（"已确认"到底意味着什么）</td></tr>
+  </tbody>
+</table>
+</div>
+
+</main>
+
+<script src="../assets/checklist.js"></script>

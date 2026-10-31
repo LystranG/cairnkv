@@ -1,0 +1,72 @@
+<title>速查 · 持久化与崩溃一致性</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/course.css">
+
+<header class="lesson">
+  <nav class="crumbs"><a href="../index.html">← 课程地图</a></nav>
+  <div class="kicker">Reference · 随课更新</div>
+  <h1>持久化与崩溃一致性速查</h1>
+  <div class="meta"><span>覆盖：第 1 课</span><span>可打印</span><span>"导论" = 《操作系统导论》（OSTEP 中文版）</span></div>
+</header>
+
+<main>
+
+<h2>每个调用"成功"意味着什么</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>调用</th><th>返回成功意味着</th><th>不意味着</th><th>出处</th></tr></thead>
+  <tbody>
+    <tr><td><code>write(fd)</code></td><td>数据进入内核页缓存；进程崩溃不丢</td><td>断电不丢</td><td>导论 §39.6</td></tr>
+    <tr><td><code>fsync(fd)</code></td><td>该文件的脏数据与 inode 已刷到设备</td><td>新文件的<strong>目录项</strong>已持久</td><td>导论 §39.6</td></tr>
+    <tr><td><code>rename(a, b)</code></td><td>名字已在内核中切换；对崩溃原子（usually）</td><td>切换已持久；a 的<strong>内容</strong>已持久</td><td>导论 §39.7</td></tr>
+    <tr><td><code>fsync(dirfd)</code></td><td>目录内容（创建 / 改名 / 删除）已持久</td><td>目录里各文件的内容已持久</td><td>导论 §39.6</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>原子替换协议（经典版，LevelDB CURRENT）</h2>
+<pre><code>write(tmp) → fsync(tmp) → rename(tmp, CURRENT) → fsync(dir)
+   ①            ②                ③                   ④</code></pre>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>断电发生在</th><th>重启后看到</th></tr></thead>
+  <tbody>
+    <tr><td>① 或 ② 之间 / 之后，③ 之前</td><td>旧 CURRENT（tmp 可能残留，需清理）</td></tr>
+    <tr><td>③ 进行中</td><td>旧或新，二者之一</td></tr>
+    <tr><td>③ 之后、④ 完成前</td><td>旧或新都合法：这时还不能对外宣称"已切换"</td></tr>
+    <tr><td>④ 之后</td><td>新 CURRENT</td></tr>
+  </tbody>
+</table>
+</div>
+<p>两条原则：<strong>内容先于名字落盘</strong>（② 在 ③ 前）；<strong>目录改动要 fsync 目录</strong>（④ 在 ③ 后）。</p>
+
+<h2>CairnKV：标记文件版（S1–S6）</h2>
+<pre><code>S2 Create(marker.manifest.&lt;iter&gt;.&lt;MANIFEST-N&gt;) → S3 Sync + Close
+→ S4 Remove(旧标记) → S5 Sync(dir)  // 失败 ⇒ panic，不可恢复</code></pre>
+<p>来源：<code>.autoresearch/work/iter-15-manifest-versioning.md:375-386</code>；<code>pebble/vfs/atomicfs/marker.go</code>。</p>
+
+<h2>CairnKV 目录 fsync 调用点 D1–D6</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>时机</th><th>防</th></tr></thead>
+  <tbody>
+    <tr><td>D1</td><td>创建 / 滚动 MANIFEST 之前</td><td>MANIFEST 自身目录项未持久</td></tr>
+    <tr><td>D2</td><td>切换标记的 S5</td><td>"当前 MANIFEST"切换未持久</td></tr>
+    <tr><td>D3</td><td>SST 刷完、登记进 MANIFEST 之前</td><td>元数据引用不存在的文件</td></tr>
+    <tr><td>D4</td><td>合并删除旧 SST 之后</td><td>删除结果不确定（文件"复活"）</td></tr>
+    <tr><td>D5</td><td>WAL 创建 / 滚动之后</td><td>WAL 文件本身找不到</td></tr>
+    <tr><td>D6</td><td><code>Close()</code> 兜底</td><td>未单独 fsync 过的删除</td></tr>
+  </tbody>
+</table>
+</div>
+<p>来源：<code>.autoresearch/work/iter-15-manifest-versioning.md:400-405</code>；结论 D02 §9.3。</p>
+
+<h2>代码证据</h2>
+<ul>
+  <li><code>leveldb/util/env_posix.cc:335-340</code>：MANIFEST 刷盘前 <code>SyncDirIfManifest()</code></li>
+  <li><code>leveldb/db/filename.cc:123-139</code>：<code>SetCurrentFile</code> = 写 tmp 并 Sync → Rename</li>
+  <li><code>badger/dir_unix.go:93-95</code>：创建 / 删除文件后必须 sync 目录（引 etcd#6368）</li>
+</ul>
+
+</main>

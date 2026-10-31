@@ -1,0 +1,50 @@
+<title>CairnKV 前置知识 · 课程地图</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="assets/course.css">
+
+<header class="lesson">
+  <div class="kicker">CairnKV · 存储引擎前置知识</div>
+  <h1>课程地图</h1>
+  <p class="subtitle">对应 docs/learning-path.md §2.1 / §2.2 / §2.4（Go 部分不在本课程内）</p>
+  <div class="meta"><span>每课 20–30 分钟</span><span>每 3–4 课一次混合复习</span><span>路线随学习记录动态调整</span></div>
+</header>
+
+<main>
+
+<h2>A · 存储与文件系统（M0–M1 之前）</h2>
+<ol>
+  <li><a href="lessons/0001-durability-chain-and-atomic-rename.html">一次写入何时才算"落地"</a>：write / fsync / rename / 目录 fsync</li>
+  <li>fsync 到底刷到哪：macOS <code>F_FULLFSYNC</code>、<code>fdatasync</code>、<code>O_DIRECT</code>（自测 2）</li>
+  <li>fsync 失败之后：fsyncgate 与毒化状态机（V-04）</li>
+  <li>半截写：扇区原子性、torn write 与 CRC（自测 4）</li>
+  <li>mmap 的代价，以及为什么第一期不用（自测 3、5）</li>
+  <li>文件系统不生而平等：精读 Pillai OSDI'14 的属性表</li>
+</ol>
+
+<h2>B · LSM 核心（M1–M3）</h2>
+<ol start="7">
+  <li>LSM 全景：为什么把随机写变成顺序追加</li>
+  <li>手工解码一条 LevelDB WAL 记录</li>
+  <li>组提交与确认点</li>
+  <li>skiplist + arena 内存表</li>
+  <li>internal key、seqnum 与全序比较（V-01）</li>
+  <li>恢复：logSeqNum 的重建（V-08）</li>
+  <li>SSTable 数据块：前缀压缩与 restart points</li>
+  <li>Bloom 过滤器与误判率</li>
+  <li>leveled vs tiered：WA / RA / SA 与 RUM</li>
+  <li>墓碑与回收的两个条件</li>
+</ol>
+
+<h2>C · 测试方法论（M1–M5）</h2>
+<ol start="17">
+  <li>vfs 故障注入、模型对拍、蜕变测试：各防哪类缺陷</li>
+</ol>
+
+<h2>速查</h2>
+<ul>
+  <li><a href="reference/durability-cheatsheet.html">持久化与崩溃一致性</a></li>
+  <li><a href="reference/ostep-persistence-reading-plan.html">OSTEP 持久化重读计划</a>（A 阶段的主线阅读，课程穿插其中作检查点）</li>
+</ul>
+
+</main>
