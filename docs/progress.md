@@ -54,7 +54,7 @@
 
 | # | 事项 | 何时需要 |
 |---|---|---|
-| H-4 | 是否推送到 GitHub（公开或私有），以便用 Actions 跑 dm-log-writes 实验 | M5 之前 |
+| H-4 | ✓ 已决定（2026-11-01）：公开仓库 https://github.com/LystranG/cairnkv 。之后可用 Actions 的 Ubuntu runner 跑 dm-log-writes 实验；先验证 runner 内核是否带这个模块 | M5 之前做验证 |
 | H-5 | M5 的最终性能数据在哪里测 | M5 之前 |
 | FF §9.2 | 7 个 hex 样例待补（跨块 WAL、MANIFEST、数据块、索引、过滤器、最小 SSTable、压缩阈值） | M1 / M2 实现时 |
 | U-7 / U-8 / U-13 | 参数最优性等未核验项 | M3 参数扫描 |
@@ -66,4 +66,5 @@
 | 2026-10-29 | 研究文档入库；规格收口决议 SC-01 ~ SC-42；写出 file-format.md、durability.md；草案 v0.2 | `c75ce85` |
 | 2026-10-29 | 三路对抗式审阅（11 个 P0、28 个 P1），修订为 SC-43 ~ SC-58；FF / DU 第二版；独立脚本算出测试向量 | `8c359d8` |
 | 2026-10-31 | 协作方式定为「AI 写全部代码、作者读代码学原理、每个模块开工前先上课」；新增 CLAUDE.md；learning/ 入库，MISSION 更新 | `1c4bd27` |
-| 2026-10-31 | 进度改用仓库内文件跟踪（不用 GitHub Issue），新增本文件 | （本次提交） |
+| 2026-10-31 | 进度改用仓库内文件跟踪（不用 GitHub Issue），新增本文件 | `14b0735` |
+| 2026-11-01 | 创建公开仓库 LystranG/cairnkv 并推送 main | （本次提交） |
